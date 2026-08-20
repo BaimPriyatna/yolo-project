@@ -1,0 +1,78 @@
+# Environment & Credentials
+.env
+.env.*
+.env.local
+*.secret
+*.key
+*.pem
+credentials.json
+
+# Python
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+*.whl
+.ipynb_checkpoints/
+
+# Training & Logs
+runs/
+wandb/
+rec_onnx_output/
+*.log
+*.tmp
+
+# Datasets
+training/Indonesia-License-Plate-2/
+Indonesia-License-Plate-2/
+
+# Generated Data
+data/output/
+data/debug/
+data/crop/
+data/input/images/*.png
+data/input/images/*.jpg
+
+# C++ Build
+inference/build/
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.o
+*.obj
+*.so
+*.so.bak
+
+# Models & Weights
+*.onnx
+*.pt
+*.pth
+weights/
+char_dict.txt
+
+# Third Party Libraries
+third_party/
+*.tgz
+*.tar.gz
+*.zip
+
+# OS & IDE
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

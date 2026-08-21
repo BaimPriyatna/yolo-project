@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -14,31 +15,29 @@
 #include "detector.h"
 #include "recognizer.h"
 
-// Mapping class ID COCO
-namespace Model1 {
-constexpr int PERSON = 0;
-constexpr int BICYCLE = 1;
-constexpr int CAR = 2;
-constexpr int MOTORCYCLE = 3;
-constexpr int BUS = 5;
-constexpr int TRUCK = 7;
-}
-
+// Class id TIDAK di-hardcode. Nama class dibaca dari models/model1_classes.txt,
+// index dicari via classIndexByName() saat runtime - ganti model (COCO <-> custom)
+// = ganti isi file itu, tanpa recompile.
 namespace Model2 {
 constexpr int HELMET = 0;
 constexpr int NO_HELMET = 1;
 }
 
-static const std::vector<std::string> kCocoClasses = {
-    "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light",
-    "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
-    "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee",
-    "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle",
-    "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
-    "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed",
-    "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven",
-    "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"
-};
+std::vector<std::string> loadClassNames(const std::string& path) {
+  std::ifstream file(path);
+  if (!file.is_open()) {
+    throw std::runtime_error("Gagal buka file class list: " + path +
+                             "\nBuat file ini (1 nama class per baris) sesuai model1.onnx. "
+                             "Lihat template di inference/config/.");
+  }
+  std::vector<std::string> names;
+  std::string line;
+  while (std::getline(file, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (!line.empty()) names.push_back(line);
+  }
+  return names;
+}
 
 struct PlateCacheEntry {
   bool found = false;
@@ -74,7 +73,16 @@ void drawLabeledBox(cv::Mat& frame, const cv::Rect& box, const std::string& labe
 }
 
 // Pipeline untuk satu kendaraan: deteksi plat + OCR + cek helm (khusus motor)
+struct VehicleClassIds {
+  int person;
+  int motorcycle;
+  int car;
+  int bus;
+  int truck;
+};
+
 void processVehicle(cv::Mat& frame, const cv::Rect& vehicle_box, int class_id, int track_id,
+                    const VehicleClassIds& ids,
                     const std::vector<Detection>& person_dets, YoloDetector& plate_model,
                     YoloDetector& helmet_model, PlateTextRecognizer& plate_recognizer,
                     std::unordered_map<int, PlateCacheEntry>& plate_cache,
@@ -82,9 +90,9 @@ void processVehicle(cv::Mat& frame, const cv::Rect& vehicle_box, int class_id, i
   cv::Rect clipped_box = vehicle_box & cv::Rect(0, 0, frame.cols, frame.rows);
   if (clipped_box.width <= 0 || clipped_box.height <= 0) return;
 
-  cv::Scalar box_color = (class_id == Model1::MOTORCYCLE) ? cv::Scalar(0, 255, 0) :
-                         (class_id == Model1::CAR)        ? cv::Scalar(255, 0, 0) :
-                         (class_id == Model1::BUS)        ? cv::Scalar(200, 50, 0) :
+  cv::Scalar box_color = (class_id == ids.motorcycle) ? cv::Scalar(0, 255, 0) :
+                         (class_id == ids.car)        ? cv::Scalar(255, 0, 0) :
+                         (class_id == ids.bus)        ? cv::Scalar(200, 50, 0) :
                                                             cv::Scalar(180, 100, 0);
   cv::rectangle(frame, clipped_box, box_color, 2);
   cv::Mat vehicle_crop = frame(clipped_box);
@@ -128,7 +136,7 @@ void processVehicle(cv::Mat& frame, const cv::Rect& vehicle_box, int class_id, i
 
   // Cek helm khusus untuk motor
   std::string helmet_suffix = "";
-  if (class_id == Model1::MOTORCYCLE) {
+  if (class_id == ids.motorcycle) {
     bool has_driver = std::any_of(person_dets.begin(), person_dets.end(),
                                   [&](const Detection& p) { return boxesOverlap(p.box, clipped_box); });
     std::string helmet_status = "no_rider";
@@ -153,9 +161,9 @@ void processVehicle(cv::Mat& frame, const cv::Rect& vehicle_box, int class_id, i
   }
 
   // Tampilkan label
-  std::string vehicle_name = (class_id == Model1::MOTORCYCLE) ? "Motor" :
-                             (class_id == Model1::CAR)        ? "Car" :
-                             (class_id == Model1::BUS)        ? "Bus" : "Truck";
+  std::string vehicle_name = (class_id == ids.motorcycle) ? "Motor" :
+                             (class_id == ids.car)        ? "Car" :
+                             (class_id == ids.bus)        ? "Bus" : "Truck";
   std::string plate_label = plate_info.found
                                 ? (plate_info.text.empty() ? "Plate:?" : "Plate:" + plate_info.text)
                                 : "Plate:-";
@@ -181,9 +189,19 @@ int main(int argc, char** argv) {
 
   std::unique_ptr<YoloDetector> model1_ptr, plate_model_ptr, model2_ptr;
   std::unique_ptr<PlateTextRecognizer> plate_recognizer_ptr;
+  VehicleClassIds ids{};
   try {
-    std::cout << "Loading Model 1 (COCO YOLO11: car, motorcycle, person, bus, truck, etc.)...\n";
-    model1_ptr = std::make_unique<YoloDetector>(env, "../models/model1.onnx", 80, kCocoClasses, 0.25f, 0.45f);
+    std::vector<std::string> model1_classes = loadClassNames("../models/model1_classes.txt");
+    std::cout << "Loading Model 1 (" << model1_classes.size() << " classes dari model1_classes.txt)...\n";
+    model1_ptr = std::make_unique<YoloDetector>(env, "../models/model1.onnx",
+                                                static_cast<int>(model1_classes.size()),
+                                                model1_classes, 0.25f, 0.45f);
+
+    ids.person = model1_ptr->classIndexByName("person");
+    ids.motorcycle = model1_ptr->classIndexByName("motorcycle");
+    ids.car = model1_ptr->classIndexByName("car");
+    try { ids.bus = model1_ptr->classIndexByName("bus"); } catch (...) { ids.bus = -1; }
+    try { ids.truck = model1_ptr->classIndexByName("truck"); } catch (...) { ids.truck = -1; }
 
     std::cout << "Loading Plate model (2 classes: plate, vehicle)...\n";
     plate_model_ptr = std::make_unique<YoloDetector>(env, "../models/plate.onnx", 2,
@@ -232,19 +250,19 @@ int main(int argc, char** argv) {
     int moto_count = 0;
 
     for (const auto& d : dets) {
-      if (d.class_id == Model1::PERSON) {
+      if (d.class_id == ids.person) {
         person_dets.push_back(d);
         drawLabeledBox(img, d.box, cv::format("Person %.2f", d.score), cv::Scalar(0, 215, 255));
-      } else if (d.class_id == Model1::MOTORCYCLE) {
+      } else if (d.class_id == ids.motorcycle) {
         moto_count++;
         vehicle_dets.push_back(d);
-      } else if (d.class_id == Model1::CAR) {
+      } else if (d.class_id == ids.car) {
         car_count++;
         vehicle_dets.push_back(d);
-      } else if (d.class_id == Model1::BUS) {
+      } else if (d.class_id == ids.bus) {
         bus_count++;
         vehicle_dets.push_back(d);
-      } else if (d.class_id == Model1::TRUCK) {
+      } else if (d.class_id == ids.truck) {
         truck_count++;
         vehicle_dets.push_back(d);
       }
@@ -252,7 +270,7 @@ int main(int argc, char** argv) {
 
     int idx = 0;
     for (const auto& v : vehicle_dets) {
-      processVehicle(img, v.box, v.class_id, idx++, person_dets, plate_model, model2, plate_recognizer,
+      processVehicle(img, v.box, v.class_id, idx++, ids, person_dets, plate_model, model2, plate_recognizer,
                      plate_cache, helmet_cache);
     }
 
@@ -301,11 +319,11 @@ int main(int argc, char** argv) {
     std::vector<Detection> person_dets;
     std::vector<Detection> vehicle_dets;
     for (const auto& d : dets) {
-      if (d.class_id == Model1::PERSON) {
+      if (d.class_id == ids.person) {
         person_dets.push_back(d);
         drawLabeledBox(frame, d.box, "Person", cv::Scalar(0, 215, 255));
-      } else if (d.class_id == Model1::MOTORCYCLE || d.class_id == Model1::CAR ||
-                 d.class_id == Model1::BUS || d.class_id == Model1::TRUCK) {
+      } else if (d.class_id == ids.motorcycle || d.class_id == ids.car ||
+                 d.class_id == ids.bus || d.class_id == ids.truck) {
         vehicle_dets.push_back(d);
       }
     }
@@ -329,7 +347,7 @@ int main(int argc, char** argv) {
                      static_cast<int>(r.width()), static_cast<int>(r.height()));
 
       auto it_cls = track_class_map.find(track_id);
-      int class_id = Model1::CAR;
+      int class_id = ids.car;
       if (it_cls != track_class_map.end()) {
         class_id = it_cls->second;
       } else {
@@ -344,7 +362,7 @@ int main(int argc, char** argv) {
         track_class_map[track_id] = class_id;
       }
 
-      processVehicle(frame, v_box, class_id, track_id, person_dets, plate_model, model2,
+      processVehicle(frame, v_box, class_id, track_id, ids, person_dets, plate_model, model2,
                      plate_recognizer, plate_cache, helmet_cache);
     }
 

@@ -37,6 +37,15 @@ const std::string& YoloDetector::className(int class_id) const {
   return class_names_.at(class_id);
 }
 
+int YoloDetector::classIndexByName(const std::string& name) const {
+  auto it = std::find(class_names_.begin(), class_names_.end(), name);
+  if (it == class_names_.end()) {
+    throw std::runtime_error("YoloDetector::classIndexByName: class '" + name +
+                             "' tidak ditemukan di daftar class model ini.");
+  }
+  return static_cast<int>(std::distance(class_names_.begin(), it));
+}
+
 cv::Mat YoloDetector::letterbox(const cv::Mat& src, LetterboxInfo& info) const {
   float r = std::min(static_cast<float>(input_w_) / src.cols,
                       static_cast<float>(input_h_) / src.rows);

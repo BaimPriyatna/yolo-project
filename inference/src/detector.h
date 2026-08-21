@@ -32,6 +32,10 @@ class YoloDetector {
 
   const std::string& className(int class_id) const;
 
+  // Cari index class berdasarkan NAMA (bukan angka hardcode). Exact match, case-sensitive.
+  // Throw kalau nggak ketemu - fail-fast daripada diam-diam pakai class id yang salah.
+  int classIndexByName(const std::string& name) const;
+
  private:
   Ort::Session session_;
   Ort::AllocatorWithDefaultOptions allocator_;

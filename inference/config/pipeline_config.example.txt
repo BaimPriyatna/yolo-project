@@ -1,0 +1,47 @@
+# Config threshold buat kalibrasi pipeline - copy file ini ke models/pipeline_config.txt
+# lalu edit nilainya sesuka hati, TIDAK PERLU recompile main.cpp buat coba nilai baru.
+#
+# File ini OPSIONAL. Kalau models/pipeline_config.txt nggak ada, semua nilai di bawah
+# ini otomatis dipakai sebagai default (lihat inference/src/config.h).
+#
+# Format: key=value (satu per baris). Baris kosong atau diawali '#' diabaikan.
+
+# --- Model 1 (car/motorcycle/person/bus/truck, full frame) ---
+# Naikkan conf_thresh kalau kebanyakan false-positive (box nongol di tempat yang bukan
+# objek). Turunkan kalau banyak objek yang harusnya kedeteksi malah kelewatan.
+model1_conf_thresh=0.25
+# nms_thresh: seberapa mirip 2 box dianggap "objek yang sama" (buang salah satunya).
+# Turunkan kalau ada 1 objek yang kegambar 2 box tumpang tindih.
+model1_nms_thresh=0.45
+
+# --- Plate model (deteksi lokasi plat, jalan di crop kendaraan) ---
+plate_conf_thresh=0.25
+plate_nms_thresh=0.45
+
+# --- Model 2 (helmet/no_helmet, jalan di crop motor+rider) ---
+model2_conf_thresh=0.25
+model2_nms_thresh=0.45
+
+# --- ByteTrack (tracking id per kendaraan lintas frame) ---
+# track_buffer: berapa frame track "ditahan" sebelum dianggap hilang kalau nggak
+# kedeteksi lagi (mis. motor sempat ketutup kendaraan lain sebentar).
+bytetrack_track_buffer=30
+# track_thresh: confidence minimum buat mulai men-track objek baru.
+bytetrack_track_thresh=0.5
+# high_thresh: confidence buat kategori deteksi "yakin tinggi" (dipakai algoritma
+# matching 2-tahap ByteTrack).
+bytetrack_high_thresh=0.6
+# match_thresh: seberapa mirip box hasil deteksi vs prediksi tracker biar dianggap
+# "objek yang sama" antar frame.
+bytetrack_match_thresh=0.8
+
+# --- Plate crop padding ---
+# Rasio padding di sekeliling box plat sebelum di-crop buat OCR (0.04 = 4% dari
+# lebar/tinggi box). Naikkan sedikit kalau karakter di ujung plat sering kepotong.
+plate_padding_ratio=0.04
+
+# --- Driver detection ---
+# Minimum IoU antara box person & box motor biar dianggap "driver" (pemicu cek helm).
+# 0.0 = perilaku default (asal ada overlap sedikit pun, dianggap driver - longgar).
+# Naikkan (mis. 0.1-0.3) kalau banyak pejalan kaki yang numpang overlap dituduh jadi driver.
+min_driver_overlap_iou=0.0

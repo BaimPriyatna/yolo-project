@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "config.h"
 #include "detector.h"
 #include "recognizer.h"
 
@@ -45,8 +46,13 @@ struct PlateCacheEntry {
   std::string text;
 };
 
-bool boxesOverlap(const cv::Rect& a, const cv::Rect& b) { 
-  return (a & b).area() > 0; 
+bool boxesOverlap(const cv::Rect& a, const cv::Rect& b, float min_iou = 0.0f) {
+  if ((a & b).area() <= 0) return false;
+  if (min_iou <= 0.0f) return true;  // sama persis perilaku lama: asal overlap sedikit pun, true
+  float inter_area = static_cast<float>((a & b).area());
+  float union_area = static_cast<float>(a.area() + b.area() - inter_area);
+  float iou = (union_area > 0) ? (inter_area / union_area) : 0.0f;
+  return iou >= min_iou;
 }
 
 float calcIoU(const cv::Rect& a, const cv::Rect& b) {
@@ -82,7 +88,7 @@ struct VehicleClassIds {
 };
 
 void processVehicle(cv::Mat& frame, const cv::Rect& vehicle_box, int class_id, int track_id,
-                    const VehicleClassIds& ids,
+                    const VehicleClassIds& ids, const PipelineConfig& config,
                     const std::vector<Detection>& person_dets, YoloDetector& plate_model,
                     YoloDetector& helmet_model, PlateTextRecognizer& plate_recognizer,
                     std::unordered_map<int, PlateCacheEntry>& plate_cache,
@@ -112,8 +118,8 @@ void processVehicle(cv::Mat& frame, const cv::Rect& vehicle_box, int class_id, i
       entry.found = true;
       entry.box = best.box & cv::Rect(0, 0, vehicle_crop.cols, vehicle_crop.rows);
       if (entry.box.width > 0 && entry.box.height > 0) {
-        int pad_x = std::max(2, static_cast<int>(entry.box.width * 0.04f));
-        int pad_y = std::max(2, static_cast<int>(entry.box.height * 0.04f));
+        int pad_x = std::max(2, static_cast<int>(entry.box.width * config.plate_padding_ratio));
+        int pad_y = std::max(2, static_cast<int>(entry.box.height * config.plate_padding_ratio));
         int px1 = std::max(0, entry.box.x - pad_x);
         int py1 = std::max(0, entry.box.y - pad_y);
         int px2 = std::min(vehicle_crop.cols, entry.box.x + entry.box.width + pad_x);
@@ -138,7 +144,7 @@ void processVehicle(cv::Mat& frame, const cv::Rect& vehicle_box, int class_id, i
   std::string helmet_suffix = "";
   if (class_id == ids.motorcycle) {
     bool has_driver = std::any_of(person_dets.begin(), person_dets.end(),
-                                  [&](const Detection& p) { return boxesOverlap(p.box, clipped_box); });
+                                  [&](const Detection& p) { return boxesOverlap(p.box, clipped_box, config.min_driver_overlap_iou); });
     std::string helmet_status = "no_rider";
     if (has_driver) {
       auto it = helmet_cache.find(track_id);
@@ -187,6 +193,8 @@ int main(int argc, char** argv) {
 
   Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "yolo-2stage");
 
+  PipelineConfig config = loadPipelineConfig("../models/pipeline_config.txt");
+
   std::unique_ptr<YoloDetector> model1_ptr, plate_model_ptr, model2_ptr;
   std::unique_ptr<PlateTextRecognizer> plate_recognizer_ptr;
   VehicleClassIds ids{};
@@ -195,7 +203,8 @@ int main(int argc, char** argv) {
     std::cout << "Loading Model 1 (" << model1_classes.size() << " classes dari model1_classes.txt)...\n";
     model1_ptr = std::make_unique<YoloDetector>(env, "../models/model1.onnx",
                                                 static_cast<int>(model1_classes.size()),
-                                                model1_classes, 0.25f, 0.45f);
+                                                model1_classes, config.model1_conf_thresh,
+                                                config.model1_nms_thresh);
 
     ids.person = model1_ptr->classIndexByName("person");
     ids.motorcycle = model1_ptr->classIndexByName("motorcycle");
@@ -205,11 +214,13 @@ int main(int argc, char** argv) {
 
     std::cout << "Loading Plate model (2 classes: plate, vehicle)...\n";
     plate_model_ptr = std::make_unique<YoloDetector>(env, "../models/plate.onnx", 2,
-                                                      std::vector<std::string>{"plate", "vehicle"});
+                                                      std::vector<std::string>{"plate", "vehicle"},
+                                                      config.plate_conf_thresh, config.plate_nms_thresh);
 
     std::cout << "Loading Model 2 (helmet, no_helmet)...\n";
     model2_ptr = std::make_unique<YoloDetector>(env, "../models/model2.onnx", 2,
-                                                std::vector<std::string>{"helmet", "no_helmet"});
+                                                std::vector<std::string>{"helmet", "no_helmet"},
+                                                config.model2_conf_thresh, config.model2_nms_thresh);
 
     std::cout << "Loading Plate text recognizer (CTC)...\n";
     plate_recognizer_ptr = std::make_unique<PlateTextRecognizer>(
@@ -270,7 +281,7 @@ int main(int argc, char** argv) {
 
     int idx = 0;
     for (const auto& v : vehicle_dets) {
-      processVehicle(img, v.box, v.class_id, idx++, ids, person_dets, plate_model, model2, plate_recognizer,
+      processVehicle(img, v.box, v.class_id, idx++, ids, config, person_dets, plate_model, model2, plate_recognizer,
                      plate_cache, helmet_cache);
     }
 
@@ -302,7 +313,7 @@ int main(int argc, char** argv) {
   int fps_hint = static_cast<int>(cap.get(cv::CAP_PROP_FPS));
   if (fps_hint <= 0) fps_hint = 30;
 
-  byte_track::BYTETracker tracker(fps_hint, 30);
+  byte_track::BYTETracker tracker(fps_hint, config.bytetrack_track_buffer, config.bytetrack_track_thresh, config.bytetrack_high_thresh, config.bytetrack_match_thresh);
 
   cv::Mat frame;
   while (true) {
@@ -362,7 +373,7 @@ int main(int argc, char** argv) {
         track_class_map[track_id] = class_id;
       }
 
-      processVehicle(frame, v_box, class_id, track_id, ids, person_dets, plate_model, model2,
+      processVehicle(frame, v_box, class_id, track_id, ids, config, person_dets, plate_model, model2,
                      plate_recognizer, plate_cache, helmet_cache);
     }
 

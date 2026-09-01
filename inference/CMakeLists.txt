@@ -25,6 +25,7 @@ add_executable(yolo
   src/main.cpp
   src/detector.cpp
   src/recognizer.cpp
+  src/config.cpp
 )
 
 target_include_directories(yolo PRIVATE

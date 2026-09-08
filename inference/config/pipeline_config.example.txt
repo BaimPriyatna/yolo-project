@@ -45,3 +45,15 @@ plate_padding_ratio=0.04
 # 0.0 = perilaku default (asal ada overlap sedikit pun, dianggap driver - longgar).
 # Naikkan (mis. 0.1-0.3) kalau banyak pejalan kaki yang numpang overlap dituduh jadi driver.
 min_driver_overlap_iou=0.0
+
+# --- Optimasi performa (mode video/kamera) ---
+# Model 1 + ByteTrack (paling berat) cuma jalan tiap N frame; frame di antaranya reuse
+# hasil deteksi terakhir buat digambar. 1 = proses tiap frame (nonaktif). Naikkan
+# (mis. 2 atau 3) kalau FPS terlalu rendah - trade-off: posisi box jadi agak "nge-lag".
+frame_skip=1
+
+# Resize frame capture sebelum diproses (0 = pakai resolusi asli device/stream).
+# Turunkan kalau device/stream sumbernya resolusi tinggi dan itu jadi bottleneck.
+capture_width=0
+capture_height=0
+

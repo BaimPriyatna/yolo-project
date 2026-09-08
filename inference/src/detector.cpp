@@ -15,6 +15,7 @@ YoloDetector::YoloDetector(Ort::Env& env, const std::string& model_path, int num
       input_h_(input_h) {
   Ort::SessionOptions session_options;
   session_options.SetIntraOpNumThreads(0);  // auto-detect jumlah thread
+  session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
   session_ = Ort::Session(env, model_path.c_str(), session_options);
 
   // Ambil nama input/output dari model dan simpan sebagai string

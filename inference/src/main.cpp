@@ -309,13 +309,27 @@ int main(int argc, char** argv) {
     return 1;
   }
   cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
+  if (config.capture_width > 0) cap.set(cv::CAP_PROP_FRAME_WIDTH, config.capture_width);
+  if (config.capture_height > 0) cap.set(cv::CAP_PROP_FRAME_HEIGHT, config.capture_height);
 
   int fps_hint = static_cast<int>(cap.get(cv::CAP_PROP_FPS));
   if (fps_hint <= 0) fps_hint = 30;
 
   byte_track::BYTETracker tracker(fps_hint, config.bytetrack_track_buffer, config.bytetrack_track_thresh, config.bytetrack_high_thresh, config.bytetrack_match_thresh);
 
+  // Struct kecil buat nyimpen hasil deteksi kendaraan terakhir - dipakai ulang di
+  // frame yang di-skip (lihat config.frame_skip) biar nggak perlu jalanin ulang
+  // Model 1 + ByteTrack (paling berat) di SETIAP frame.
+  struct TrackedVehicle {
+    int track_id;
+    cv::Rect box;
+    int class_id;
+  };
+  std::vector<TrackedVehicle> last_tracked_vehicles;
+  std::vector<Detection> last_person_dets;
+
   cv::Mat frame;
+  int frame_counter = 0;
   while (true) {
     auto t0 = std::chrono::steady_clock::now();
 
@@ -325,61 +339,75 @@ int main(int argc, char** argv) {
     cap.retrieve(frame);
     if (frame.empty()) break;
 
-    // Stage 1: Deteksi objek utama
-    auto dets = model1.detect(frame);
-    std::vector<Detection> person_dets;
-    std::vector<Detection> vehicle_dets;
-    for (const auto& d : dets) {
-      if (d.class_id == ids.person) {
-        person_dets.push_back(d);
-        drawLabeledBox(frame, d.box, "Person", cv::Scalar(0, 215, 255));
-      } else if (d.class_id == ids.motorcycle || d.class_id == ids.car ||
-                 d.class_id == ids.bus || d.class_id == ids.truck) {
-        vehicle_dets.push_back(d);
-      }
-    }
+    ++frame_counter;
+    bool do_detect = (config.frame_skip <= 1) || (frame_counter % config.frame_skip == 0);
 
-    // ByteTrack untuk tracking kendaraan
-    std::vector<byte_track::Object> track_objects;
-    track_objects.reserve(vehicle_dets.size());
-    for (const auto& d : vehicle_dets) {
-      byte_track::Rect<float> rect(static_cast<float>(d.box.x), static_cast<float>(d.box.y),
-                                   static_cast<float>(d.box.width),
-                                   static_cast<float>(d.box.height));
-      track_objects.emplace_back(rect, 0, d.score);
-    }
-    auto tracked = tracker.update(track_objects);
-
-    // Stage 2: Proses tiap kendaraan
-    for (const auto& strack : tracked) {
-      int track_id = static_cast<int>(strack->getTrackId());
-      const auto& r = strack->getRect();
-      cv::Rect v_box(static_cast<int>(r.x()), static_cast<int>(r.y()),
-                     static_cast<int>(r.width()), static_cast<int>(r.height()));
-
-      auto it_cls = track_class_map.find(track_id);
-      int class_id = ids.car;
-      if (it_cls != track_class_map.end()) {
-        class_id = it_cls->second;
-      } else {
-        float max_iou = 0.0f;
-        for (const auto& d : vehicle_dets) {
-          float iou = calcIoU(d.box, v_box);
-          if (iou > max_iou) {
-            max_iou = iou;
-            class_id = d.class_id;
-          }
+    if (do_detect) {
+      // Stage 1: Deteksi objek utama (paling berat - full frame, 640x640)
+      auto dets = model1.detect(frame);
+      std::vector<Detection> person_dets;
+      std::vector<Detection> vehicle_dets;
+      for (const auto& d : dets) {
+        if (d.class_id == ids.person) {
+          person_dets.push_back(d);
+        } else if (d.class_id == ids.motorcycle || d.class_id == ids.car ||
+                   d.class_id == ids.bus || d.class_id == ids.truck) {
+          vehicle_dets.push_back(d);
         }
-        track_class_map[track_id] = class_id;
       }
 
-      processVehicle(frame, v_box, class_id, track_id, ids, config, person_dets, plate_model, model2,
-                     plate_recognizer, plate_cache, helmet_cache);
+      // ByteTrack untuk tracking kendaraan
+      std::vector<byte_track::Object> track_objects;
+      track_objects.reserve(vehicle_dets.size());
+      for (const auto& d : vehicle_dets) {
+        byte_track::Rect<float> rect(static_cast<float>(d.box.x), static_cast<float>(d.box.y),
+                                     static_cast<float>(d.box.width),
+                                     static_cast<float>(d.box.height));
+        track_objects.emplace_back(rect, 0, d.score);
+      }
+      auto tracked = tracker.update(track_objects);
+
+      last_tracked_vehicles.clear();
+      for (const auto& strack : tracked) {
+        int track_id = static_cast<int>(strack->getTrackId());
+        const auto& r = strack->getRect();
+        cv::Rect v_box(static_cast<int>(r.x()), static_cast<int>(r.y()),
+                       static_cast<int>(r.width()), static_cast<int>(r.height()));
+
+        auto it_cls = track_class_map.find(track_id);
+        int class_id = ids.car;
+        if (it_cls != track_class_map.end()) {
+          class_id = it_cls->second;
+        } else {
+          float max_iou = 0.0f;
+          for (const auto& d : vehicle_dets) {
+            float iou = calcIoU(d.box, v_box);
+            if (iou > max_iou) {
+              max_iou = iou;
+              class_id = d.class_id;
+            }
+          }
+          track_class_map[track_id] = class_id;
+        }
+        last_tracked_vehicles.push_back({track_id, v_box, class_id});
+      }
+      last_person_dets = person_dets;
+    }
+    // Kalau do_detect == false: last_tracked_vehicles & last_person_dets dari frame
+    // terakhir yang diproses tetap dipakai apa adanya (posisi box jadi agak "nge-lag"
+    // dikit dibanding kondisi real, tapi Model 1 + ByteTrack nggak perlu jalan lagi).
+
+    for (const auto& d : last_person_dets) {
+      drawLabeledBox(frame, d.box, "Person", cv::Scalar(0, 215, 255));
+    }
+    for (const auto& v : last_tracked_vehicles) {
+      processVehicle(frame, v.box, v.class_id, v.track_id, ids, config, last_person_dets,
+                     plate_model, model2, plate_recognizer, plate_cache, helmet_cache);
     }
 
     auto t1 = std::chrono::steady_clock::now();
     double fps = 1000.0 / std::chrono::duration<double, std::milli>(t1 - t0).count();
-    cv::putText(frame, cv::format("FPS: %.1f | vehicles: %zu", fps, tracked.size()), cv::Point(10, 25),
+    cv::putText(frame, cv::format("FPS: %.1f | vehicles: %zu", fps, last_tracked_vehicles.size()), cv::Point(10, 25),
                cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(0, 255, 0), 2);
 
     cv::imshow("2-Stage Traffic Pipeline", frame);

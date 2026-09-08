@@ -30,6 +30,18 @@ struct PipelineConfig {
   // Minimum IoU antara box person & box motor buat dianggap "driver". Default 0.0 berarti
   // exact perilaku lama (asal ada overlap sedikit pun, dianggap driver).
   float min_driver_overlap_iou = 0.0f;
+
+  // --- Optimasi performa (khusus mode video/kamera) ---
+  // Model 1 + ByteTrack (paling berat) cuma jalan tiap N frame; frame di antaranya
+  // reuse hasil deteksi terakhir buat digambar (posisi box jadi agak "nge-lag" dikit,
+  // tapi jauh lebih ringan). 1 = proses tiap frame (nonaktif, perilaku lama).
+  int frame_skip = 1;
+
+  // Resize frame capture sebelum diproses (0 = pakai resolusi asli device/stream).
+  // Frame lebih kecil = decode+preprocessing lebih cepat, tapi objek kecil/jauh bisa
+  // lebih susah kedeteksi.
+  int capture_width = 0;
+  int capture_height = 0;
 };
 
 // Load dari file key=value (format: "nama_key=angka", baris kosong/diawali '#' diabaikan).

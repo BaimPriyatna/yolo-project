@@ -12,6 +12,7 @@ PlateTextRecognizer::PlateTextRecognizer(Ort::Env& env, const std::string& model
 
   Ort::SessionOptions session_options;
   session_options.SetIntraOpNumThreads(0);
+  session_options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
   session_ = Ort::Session(env, model_path.c_str(), session_options);
 
   auto input_name_alloc = session_.GetInputNameAllocated(0, allocator_);

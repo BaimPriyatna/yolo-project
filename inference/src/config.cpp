@@ -85,6 +85,9 @@ PipelineConfig loadPipelineConfig(const std::string& path) {
   setFloatIfPresent(kv, "bytetrack_match_thresh", config.bytetrack_match_thresh);
   setFloatIfPresent(kv, "plate_padding_ratio", config.plate_padding_ratio);
   setFloatIfPresent(kv, "min_driver_overlap_iou", config.min_driver_overlap_iou);
+  setIntIfPresent(kv, "frame_skip", config.frame_skip);
+  setIntIfPresent(kv, "capture_width", config.capture_width);
+  setIntIfPresent(kv, "capture_height", config.capture_height);
 
   std::cout << "[config] Berhasil load threshold dari " << path << "\n";
   return config;
